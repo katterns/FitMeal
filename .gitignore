@@ -11,8 +11,7 @@ venv/
 .coverage
 htmlcov/
 
-models/*.joblib
-models/*.pkl
+data/nutrition_profiles.csv
 
 postgres_data/
 fitmeal.db
