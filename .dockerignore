@@ -1,0 +1,12 @@
+.git
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.DS_Store
+fitmeal.db
+test_fitmeal.db
+htmlcov
+tests/
+pytest.ini
+.coveragerc
