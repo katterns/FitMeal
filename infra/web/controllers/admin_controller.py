@@ -17,7 +17,7 @@ class UserStatRow(BaseModel):
 
 @router.get("/stats", response_model=list[UserStatRow])
 def list_user_stats(db=Depends(get_db), _admin=Depends(get_current_admin)):
-    users = db.query(UserModel).filter(UserModel.role == "user").order_by(UserModel.email)
+    users = db.query(UserModel).filter(UserModel.role == "user").order_by(UserModel.email).all()
     rows = []
     for u in users:
         requests = (

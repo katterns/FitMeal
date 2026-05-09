@@ -2,7 +2,6 @@ from pathlib import Path
 
 import pandas as pd
 
-from core.domain import ActivityLevel, BiologicalSex, NutritionGoal, NutritionProfile
 from infra.ml.nutrition_predictor import NutritionPredictor
 from infra.ml.train_models import build_preprocessor, calculate_calories, generate_synthetic_dataset
 
@@ -30,16 +29,16 @@ def test_synthetic_csv(tmp_path):
 def test_predictor():
     models_dir = Path(__file__).resolve().parents[1] / "models"
     predictor = NutritionPredictor(str(models_dir))
-    profile = NutritionProfile(
-        1,
-        32,
-        BiologicalSex.FEMALE,
-        165,
-        62,
-        ActivityLevel.MEDIUM,
-        NutritionGoal.MAINTENANCE,
-        ["nuts"],
-        [],
-        ["огурцы"],
-    )
+    profile = {
+        "user_id": 1,
+        "age": 32,
+        "sex": "female",
+        "height_cm": 165,
+        "weight_kg": 62,
+        "activity_level": "medium",
+        "goal": "maintenance",
+        "dietary_restrictions": ["орехи"],
+        "disliked_foods": [],
+        "preferred_foods": ["огурцы"],
+    }
     assert predictor.predict(profile) > 1000

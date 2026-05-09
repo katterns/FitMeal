@@ -78,6 +78,7 @@ def test_basic_analysis():
     d = r.json()
     assert r.status_code == 200
     assert d["status"] == "completed" and d["predicted_calories"] > 0
+    assert d["your_number"] == 1
 
 
 def test_pro_analysis_fails_without_mistral_key():

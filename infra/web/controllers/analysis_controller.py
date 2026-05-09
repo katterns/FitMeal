@@ -5,9 +5,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import joinedload
 
 from config.settings import get_settings
-from core.domain import ActivityLevel, BiologicalSex, NutritionGoal, TariffCode
 from infra.db.database import get_db
 from infra.db.models import AnalysisTaskModel, NutritionProfileModel
+from infra.prometheus_metrics import ANALYSIS_CREATED, ANALYSIS_REJECTED
 from infra.tasks.celery_app import process_analysis
 from infra.web.controllers.promo_controller import discounted_price_for_user
 from infra.web.security import get_current_user
@@ -19,18 +19,18 @@ settings = get_settings()
 
 class NutritionProfileRequest(BaseModel):
     age: int = Field(ge=14, le=90)
-    sex: BiologicalSex
+    sex: str = Field(pattern="^(female|male)$")
     height_cm: float = Field(ge=120, le=230)
     weight_kg: float = Field(ge=35, le=250)
-    activity_level: ActivityLevel
-    goal: NutritionGoal
-    dietary_restrictions: list[str] = []
-    disliked_foods: list[str] = []
-    preferred_foods: list[str] = []
+    activity_level: str = Field(pattern="^(low|medium|high)$")
+    goal: str = Field(pattern="^(weight_loss|maintenance|muscle_gain)$")
+    dietary_restrictions: list = Field(default_factory=list)
+    disliked_foods: list = Field(default_factory=list)
+    preferred_foods: list = Field(default_factory=list)
 
 
 class CreateAnalysisRequest(BaseModel):
-    tariff: TariffCode
+    tariff: str = Field(pattern="^(basic|pro)$")
     profile: NutritionProfileRequest
 
 
@@ -44,14 +44,29 @@ class AnalysisResponse(BaseModel):
     predicted_calories: int | None = None
     meal_plan_text: str | None = None
     meal_plan_explanation: str | None = None
+    your_number: int | None = Field(
+        default=None,
+        description="Порядковый номер анализа у пользователя по времени создания (1 = самый первый)",
+    )
 
 
 class LastProfileResponse(NutritionProfileRequest):
-    tariff: TariffCode = TariffCode.BASIC
+    tariff: str = Field(default="basic", pattern="^(basic|pro)$")
 
 
-def pack(task):
+def analysis_serial_numbers_by_user(db, user_id):
+    rows = (
+        db.query(AnalysisTaskModel.id)
+        .filter(AnalysisTaskModel.user_id == user_id)
+        .order_by(AnalysisTaskModel.created_at.asc(), AnalysisTaskModel.id.asc())
+        .all()
+    )
+    return {row[0]: i + 1 for i, row in enumerate(rows)}
+
+
+def analysis_response(task, serial_by_id=None):
     result = task.result
+    your_number = serial_by_id.get(task.id) if serial_by_id is not None else None
     return AnalysisResponse(
         id=task.id,
         tariff=task.tariff,
@@ -62,6 +77,7 @@ def pack(task):
         predicted_calories=result.predicted_calories if result else None,
         meal_plan_text=result.meal_plan_text if result else None,
         meal_plan_explanation=(result.explanation or None) if result and result.meal_plan_text else None,
+        your_number=your_number,
     )
 
 
@@ -71,16 +87,15 @@ def create_analysis(
     current_user=Depends(get_current_user),
     db=Depends(get_db),
 ):
-    price = (
-        settings.basic_tariff_price if request.tariff == TariffCode.BASIC else settings.pro_tariff_price
-    )
+    price = settings.basic_tariff_price if request.tariff == "basic" else settings.pro_tariff_price
     final_price, promo_activation_id = discounted_price_for_user(db, current_user.id, price)
     if current_user.balance < final_price:
+        ANALYSIS_REJECTED.labels(tier=request.tariff, reason="insufficient_credits").inc()
         raise HTTPException(status_code=400, detail="Недостаточно кредитов")
 
     task = AnalysisTaskModel(
         user_id=current_user.id,
-        tariff=request.tariff.value,
+        tariff=request.tariff,
         status="pending",
         cost=final_price,
         promo_activation_id=promo_activation_id,
@@ -92,11 +107,11 @@ def create_analysis(
         analysis_id=task.id,
         user_id=current_user.id,
         age=request.profile.age,
-        sex=request.profile.sex.value,
+        sex=request.profile.sex,
         height_cm=request.profile.height_cm,
         weight_kg=request.profile.weight_kg,
-        activity_level=request.profile.activity_level.value,
-        goal=request.profile.goal.value,
+        activity_level=request.profile.activity_level,
+        goal=request.profile.goal,
         dietary_restrictions=request.profile.dietary_restrictions,
         disliked_foods=request.profile.disliked_foods,
         preferred_foods=request.profile.preferred_foods,
@@ -106,8 +121,10 @@ def create_analysis(
     db.refresh(task)
 
     process_analysis.delay(task.id)
+    ANALYSIS_CREATED.labels(tier=request.tariff).inc()
     db.refresh(task)
-    return pack(task)
+    serial = analysis_serial_numbers_by_user(db, current_user.id)
+    return analysis_response(task, serial)
 
 
 @router.get("/history", response_model=list[AnalysisResponse])
@@ -122,7 +139,8 @@ def list_history(
         .order_by(AnalysisTaskModel.created_at.desc())
         .all()
     )
-    return [pack(task) for task in tasks]
+    serial = analysis_serial_numbers_by_user(db, current_user.id)
+    return [analysis_response(task, serial) for task in tasks]
 
 
 @router.get("/profile/last", response_model=LastProfileResponse | None)
@@ -139,18 +157,18 @@ def get_last_profile(
     if profile is None:
         return None
 
-    tariff = TariffCode.BASIC
-    if profile.analysis and profile.analysis.tariff == TariffCode.PRO.value:
-        tariff = TariffCode.PRO
+    tariff = "basic"
+    if profile.analysis and profile.analysis.tariff == "pro":
+        tariff = "pro"
 
     return LastProfileResponse(
         tariff=tariff,
         age=profile.age,
-        sex=BiologicalSex(profile.sex),
+        sex=profile.sex,
         height_cm=profile.height_cm,
         weight_kg=profile.weight_kg,
-        activity_level=ActivityLevel(profile.activity_level),
-        goal=NutritionGoal(profile.goal),
+        activity_level=profile.activity_level,
+        goal=profile.goal,
         dietary_restrictions=profile.dietary_restrictions,
         disliked_foods=profile.disliked_foods,
         preferred_foods=profile.preferred_foods,
@@ -171,4 +189,5 @@ def get_analysis(
     )
     if task is None:
         raise HTTPException(status_code=404, detail="Анализ не найден")
-    return pack(task)
+    serial = analysis_serial_numbers_by_user(db, current_user.id)
+    return analysis_response(task, serial)

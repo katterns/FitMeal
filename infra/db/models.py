@@ -118,4 +118,6 @@ class AnalysisResultModel(Base):
     explanation = mapped_column(Text, nullable=True)
     created_at = mapped_column(DateTime(timezone=True), default=utcnow)
 
+    __table_args__ = (UniqueConstraint("analysis_id", name="uq_analysis_results_analysis_id"),)
+
     analysis = relationship("AnalysisTaskModel", back_populates="result")

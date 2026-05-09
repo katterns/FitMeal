@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 
 from infra.db.database import get_db
 from infra.db.models import PromoCodeModel, UserPromoActivationModel
@@ -18,7 +18,7 @@ def as_utc(dt):
 
 def discounted_price_for_user(db, user_id, list_price):
     now = datetime.now(timezone.utc)
-    for act in (
+    for activation in (
         db.query(UserPromoActivationModel)
         .join(PromoCodeModel)
         .filter(
@@ -28,11 +28,12 @@ def discounted_price_for_user(db, user_id, list_price):
         )
         .order_by(PromoCodeModel.discount_percent.desc(), UserPromoActivationModel.id)
     ):
-        vu = as_utc(act.promo_code.valid_until)
-        if vu and vu < now:
+        promo = activation.promo_code
+        valid_until = as_utc(promo.valid_until)
+        if valid_until and valid_until < now:
             continue
-        p = act.promo_code
-        return max(1, int(round(list_price * (100 - p.discount_percent) / 100))), act.id
+        price = int(round(list_price * (100 - promo.discount_percent) / 100))
+        return max(1, price), activation.id
     return list_price, None
 
 
@@ -41,8 +42,6 @@ class ApplyPromoBody(BaseModel):
 
 
 class PromoMineRow(BaseModel):
-    model_config = ConfigDict(from_attributes=False)
-
     code: str
     discount_percent: int
     uses_left: int
@@ -55,14 +54,16 @@ def apply_promo(body: ApplyPromoBody, current_user=Depends(get_current_user), db
     promo = db.query(PromoCodeModel).filter(PromoCodeModel.code == code).first()
     if promo is None or not promo.is_active:
         raise HTTPException(404, "Промокод не найден")
-    vu = as_utc(promo.valid_until)
-    if vu and vu < datetime.now(timezone.utc):
+    valid_until = as_utc(promo.valid_until)
+    if valid_until and valid_until < datetime.now(timezone.utc):
         raise HTTPException(400, "Срок действия промокода истёк")
-    ex = db.query(UserPromoActivationModel).filter_by(user_id=current_user.id, promo_code_id=promo.id).first()
-    if ex:
-        if ex.uses_consumed >= promo.max_uses_per_user:
+
+    activation = db.query(UserPromoActivationModel).filter_by(user_id=current_user.id, promo_code_id=promo.id).first()
+    if activation:
+        if activation.uses_consumed >= promo.max_uses_per_user:
             raise HTTPException(400, "Промокод уже использован полностью")
         return {"ok": True, "message": "Промокод уже активирован"}
+
     db.add(UserPromoActivationModel(user_id=current_user.id, promo_code_id=promo.id))
     db.commit()
     return {"ok": True, "message": "Промокод активирован"}
@@ -72,23 +73,27 @@ def apply_promo(body: ApplyPromoBody, current_user=Depends(get_current_user), db
 def my_promos(current_user=Depends(get_current_user), db=Depends(get_db)):
     now = datetime.now(timezone.utc)
     out = []
-    for act, p in (
+    for activation, promo in (
         db.query(UserPromoActivationModel, PromoCodeModel)
         .join(PromoCodeModel, UserPromoActivationModel.promo_code_id == PromoCodeModel.id)
         .filter(UserPromoActivationModel.user_id == current_user.id)
         .order_by(UserPromoActivationModel.id)
         .all()
     ):
-        if not p.is_active:
+        if not promo.is_active:
             continue
-        if (t := as_utc(p.valid_until)) and t < now:
+        valid_until = as_utc(promo.valid_until)
+        if valid_until and valid_until < now:
             continue
-        left = p.max_uses_per_user - act.uses_consumed
+        left = promo.max_uses_per_user - activation.uses_consumed
         if left <= 0:
             continue
         out.append(
             PromoMineRow(
-                code=p.code, discount_percent=p.discount_percent, uses_left=left, valid_until=p.valid_until
+                code=promo.code,
+                discount_percent=promo.discount_percent,
+                uses_left=left,
+                valid_until=promo.valid_until,
             )
         )
     return out

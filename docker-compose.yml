@@ -12,6 +12,7 @@ services:
       JWT_SECRET_KEY: change-me
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
       MISTRAL_MODEL: ${MISTRAL_MODEL:-mistral-medium-latest}
+      MISTRAL_BASE_URL: ${MISTRAL_BASE_URL:-https://api.mistral.ai/v1}
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
     depends_on:
       - postgres
@@ -31,13 +32,14 @@ services:
 
   worker:
     build: .
-    command: celery -A infra.tasks.celery_app worker --loglevel=info
+    command: celery -A infra.tasks.celery_app worker --loglevel=info --pool=solo
     environment:
       DATABASE_URL: postgresql+psycopg2://fitmeal:fitmeal@postgres:5432/fitmeal
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET_KEY: change-me
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
       MISTRAL_MODEL: ${MISTRAL_MODEL:-mistral-medium-latest}
+      MISTRAL_BASE_URL: ${MISTRAL_BASE_URL:-https://api.mistral.ai/v1}
     depends_on:
       - postgres
       - redis
@@ -73,11 +75,18 @@ services:
       - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     depends_on:
       - api
+      - worker
 
   grafana:
     image: grafana/grafana
     ports:
       - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       - prometheus
 

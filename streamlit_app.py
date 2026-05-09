@@ -89,6 +89,21 @@ def call_api(method, path, token=None, **kwargs):
     return r.json()
 
 
+def get_analysis_status_raw(analysis_id, token):
+    """GET статуса без st.error — для частого опроса."""
+    try:
+        r = requests.get(
+            f"{API_BASE_URL}/api/v1/analysis/{analysis_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=(5, 25),
+        )
+        if r.status_code == 200:
+            return r.json()
+    except requests.RequestException:
+        pass
+    return None
+
+
 def login_form():
     st.subheader("Вход")
     email = st.text_input("Email")
@@ -219,23 +234,35 @@ def user_dashboard(token, me):
         }
         result = call_api("POST", "/api/v1/analysis", token=token, json=payload)
         if result:
-            with st.spinner("Анализ обрабатывается..."):
-                result = poll_analysis(result["id"], token)
+            poll_hint = st.empty()
+            with st.spinner("Анализ обрабатывается…"):
+                result = poll_analysis(result["id"], token, progress_placeholder=poll_hint)
+            poll_hint.empty()
+            num = result.get("your_number")
+            human = f"Ваш анализ №{num}" if num is not None else "Анализ"
             if result.get("status") == "completed":
-                st.success(f"Задача #{result['id']} успешно выполнена.")
+                st.success(f"{human} успешно выполнен.")
             elif result.get("status") == "failed":
-                st.error(f"Задача #{result['id']} завершилась ошибкой.")
+                st.error(f"{human} завершился ошибкой.")
             else:
                 st.info(
-                    f"Задача #{result['id']} ещё обрабатывается. "
-                    "Результат появится в истории чуть позже."
+                    f"{human} ещё обрабатывается на сервере (ожидание в интерфейсе уже закончилось). "
+                    "Обновите страницу или разверните первый пункт в истории ниже через минуту."
                 )
             show_one(result)
             st.rerun()
+    if st.button("Обновить историю"):
+        st.rerun()
     history = call_api("GET", "/api/v1/analysis/history", token=token)
     if history:
-        for item in history[:10]:
-            with st.expander(f"Анализ #{item['id']} - {item['tariff']} - {item['status']}"):
+        for idx, item in enumerate(history[:10]):
+            yn = item.get("your_number")
+            title = (
+                f"Ваш анализ №{yn} · {item['tariff']} · {item['status']}"
+                if yn is not None
+                else f"Анализ · {item['tariff']} · {item['status']}"
+            )
+            with st.expander(title, expanded=(idx == 0)):
                 show_one(item)
 
 
@@ -258,15 +285,20 @@ def admin_stats_tab(token):
     st.dataframe(df, use_container_width=True, hide_index=True)
 
 
-def poll_analysis(analysis_id, token):
+def poll_analysis(analysis_id, token, *, max_wait_seconds=320, interval=1.5, progress_placeholder=None):
+    """Ждём completed/failed с учётом Pro+Mistral и лимитов Celery"""
     result = {"id": analysis_id, "status": "pending"}
-    for _ in range(10):
-        loaded = call_api("GET", f"/api/v1/analysis/{analysis_id}", token=token)
+    t0 = time.monotonic()
+    deadline = t0 + max_wait_seconds
+    while time.monotonic() < deadline:
+        if progress_placeholder is not None:
+            progress_placeholder.caption(f"Запрос статуса… прошло ~{int(time.monotonic() - t0)} с")
+        loaded = get_analysis_status_raw(analysis_id, token)
         if loaded:
             result = loaded
             if loaded.get("status") in {"completed", "failed"}:
                 return loaded
-        time.sleep(1)
+        time.sleep(interval)
     return result
 
 

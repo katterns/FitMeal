@@ -4,8 +4,6 @@ from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from sqlalchemy import inspect, text
-
 from config.settings import get_settings
 from infra.db.database import SessionLocal, engine
 from infra.db.models import Base, PromoCodeModel, UserModel
@@ -23,18 +21,6 @@ settings = get_settings()
 
 def create_tables():
     Base.metadata.create_all(bind=engine)
-
-
-def ensure_schema():
-    # create_all не дописывает колонки в уже существующие таблицы (старый том Postgres и т.п.).
-    insp = inspect(engine)
-    if not insp.has_table("analysis_tasks"):
-        return
-    cols = {c["name"] for c in insp.get_columns("analysis_tasks")}
-    if "promo_activation_id" in cols:
-        return
-    with engine.begin() as conn:
-        conn.execute(text("ALTER TABLE analysis_tasks ADD COLUMN promo_activation_id INTEGER"))
 
 
 def seed_promo_codes():
@@ -69,7 +55,6 @@ def ensure_ml_models():
 def create_app():
     ensure_ml_models()
     create_tables()
-    ensure_schema()
     seed_promo_codes()
     seed_admin_user()
 

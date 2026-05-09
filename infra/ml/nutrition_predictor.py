@@ -17,11 +17,11 @@ class NutritionPredictor:
 
     def _profile_to_features(self, profile):
         row = {
-            "age": profile.age,
-            "sex": profile.sex.value,
-            "height_cm": profile.height_cm,
-            "weight_kg": profile.weight_kg,
-            "activity_level": profile.activity_level.value,
-            "goal": profile.goal.value,
+            "age": profile["age"],
+            "sex": profile["sex"],
+            "height_cm": profile["height_cm"],
+            "weight_kg": profile["weight_kg"],
+            "activity_level": profile["activity_level"],
+            "goal": profile["goal"],
         }
         return pd.DataFrame([row], columns=["age", "sex", "height_cm", "weight_kg", "activity_level", "goal"])

@@ -18,9 +18,13 @@ class Settings(BaseSettings):
     models_dir: str = "models"
     basic_tariff_price: int = 5
     pro_tariff_price: int = 15
-    mistral_api_key: str | None = None
-    mistral_model: str = "mistral-medium-latest"
+    mistral_api_key: str = ""
+    mistral_model: str = "mistral-small-latest"
     mistral_base_url: str = "https://api.mistral.ai/v1"
+
+    analysis_stale_reclaim_seconds: int = 600
+    celery_analysis_soft_time_limit: int = 300
+    celery_analysis_time_limit: int = 900
 
     admin_emails: str = ""
 
